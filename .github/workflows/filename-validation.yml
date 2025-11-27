@@ -1,0 +1,121 @@
+name: File Name Validator
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate-file-names:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Find files changed in PR
+        id: file_changes
+        uses: tj-actions/changed-files@v35
+        with:
+          files: |
+            daily/**
+            weekly/**
+            monthly/**
+            yearly/**
+
+      - name: Validate file names
+        run: |
+          echo "🔍 Validating file names..."
+
+          # Loop through all changed files
+          for file in ${{ steps.file_changes.outputs.all_changed_files }}; do
+
+            echo "Checking file: $file"
+
+            # 1. Validate extension ----------------------------------------------------
+            if [[ "$file" != *.csv ]]; then
+              echo "❌ ERROR: File must end with .csv"
+              echo "Invalid file: $file"
+              exit 1
+            fi
+
+            # 2. Extract filename only (without folder)
+            filename=$(basename "$file")
+
+            # Expected pattern:
+            # <serial> <year> <count>_<event> <month>.csv
+            regex="^([0-9]+)\s([0-9]{4})\s([0-9]+)_(day|week|month|year)\s([A-Za-z]+)\.csv$"
+
+            if [[ ! "$filename" =~ $regex ]]; then
+              echo "❌ ERROR: Invalid file name format"
+              echo "File must match: <serial> <year> <count>_<event> <month>.csv"
+              echo "Invalid file: $filename"
+              exit 1
+            fi
+
+            serial="${BASH_REMATCH[1]}"
+            year="${BASH_REMATCH[2]}"
+            count="${BASH_REMATCH[3]}"
+            event="${BASH_REMATCH[4]}"
+            month="${BASH_REMATCH[5]}"
+
+            echo "✔ Parsed -> serial=$serial, year=$year, count=$count, event=$event, month=$month"
+
+            # 3. FOLDER VALIDATION -----------------------------------------------------
+
+            if [[ "$file" == daily/* ]] && [[ "$event" != "day" ]]; then
+              echo "❌ ERROR: Daily folder must contain *_day files."
+              exit 1
+            fi
+
+            if [[ "$file" == weekly/* ]] && [[ "$event" != "week" ]]; then
+              echo "❌ ERROR: Weekly folder must contain *_week files."
+              exit 1
+            fi
+
+            if [[ "$file" == monthly/* ]] && [[ "$event" != "month" ]]; then
+              echo "❌ ERROR: Monthly folder must contain *_month files."
+              exit 1
+            fi
+
+            if [[ "$file" == yearly/* ]] && [[ "$event" != "year" ]]; then
+              echo "❌ ERROR: Yearly folder must contain *_year files."
+              exit 1
+            fi
+
+            # 4. MONTH NAME VALIDATION -------------------------------------------------
+            months=(january february march april may june july august september october november december)
+
+            valid_month=false
+            for m in "${months[@]}"; do
+              if [[ "${month,,}" == "$m" ]]; then
+                valid_month=true
+              fi
+            done
+
+            if [[ "$valid_month" = false ]]; then
+              echo "❌ ERROR: Invalid month name: $month"
+              exit 1
+            fi
+
+            echo "✔ Month validated"
+
+            # 5. YEARLY FOLDER STRICT RULE -------------------------------------------
+            if [[ "$file" == yearly/* ]]; then
+              if [[ "$count" != "1" ]]; then
+                echo "❌ ERROR: Yearly file must always be: 1_year"
+                exit 1
+              fi
+
+              if [[ "${month,,}" != "december" ]]; then
+                echo "❌ ERROR: Yearly files must use december.csv"
+                exit 1
+              fi
+
+              echo "✔ Yearly folder validated"
+            fi
+
+            echo "✔ $file passed all checks!"
+          done
+
+          echo "🎉 All file names are valid!"
