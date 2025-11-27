@@ -2,55 +2,52 @@ name: File Name Validator
 
 on:
   pull_request:
-    branches:
-      - main
     paths:
-      - daily/**
-      - weekly/**
-      - monthly/**
-      - yearly/**
-
-permissions:
-  contents: read
-  pull-requests: write
+      - "**"
 
 jobs:
   validate-file-names:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Get changed files
-        id: changed-files
+      - name: Get changed files (WITH SPACES SUPPORT)
+        id: changed
         uses: tj-actions/changed-files@v35
+        with:
+          separator: "|"
 
       - name: Validate file names and CSV content
         run: |
-          echo "🔍 Validating file names and CSV content..."
+          echo "🔍 Validating files..."
 
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            echo "Checking file: $file"
+          IFS="|" read -ra files <<< "${{ steps.changed.outputs.all_changed_files }}"
 
-            filename=$(basename "$file")
+          echo "Changed files detected:"
+          printf '%s\n' "${files[@]}"
 
-            # REMOVE EXTENSION CHECK — user uploads WITHOUT .csv
-            # Instead, check if the file CONTENT looks like CSV
-            echo "➡ Checking if file content is CSV..."
+          # Loop through each changed file
+          for file in "${files[@]}"; do
 
-            # Content-based CSV detection: must contain at least ONE comma
-            if ! grep -q "," "$file"; then
-              echo "❌ ERROR: File content is NOT CSV (missing commas)"
-              exit 1
+            # Validate only files inside data folders
+            if [[ "$file" != daily/* && "$file" != weekly/* && "$file" != monthly/* && "$file" != yearly/* ]]; then
+              echo "ℹ Skipping non-data file: $file"
+              continue
             fi
 
-            # Validate filename format without extension
-            # Pattern: <serial> <year> <count>_<event> <month>
-            regex="^([0-9]+)\s([0-9]{4})\s([0-9]+)_(day|week|month|year)\s([A-Za-z]+)$"
+            echo "----------------------------------------"
+            echo "Checking file: $file"
 
-            # Strip extension if user adds any accidentally
+            # Extract filename only (with spaces)
+            filename="$(basename "$file")"
             name_without_ext="${filename%.*}"
+
+            echo "➡ Filename (no extension): $name_without_ext"
+
+            # REGEX: <serial> <year> <count>_<event> <month>
+            regex="^([0-9]+)\s([0-9]{4})\s([0-9]+)_(day|week|month|year)\s([A-Za-z]+)$"
 
             if [[ ! "$name_without_ext" =~ $regex ]]; then
               echo "❌ ERROR: Invalid filename format → $filename"
@@ -63,36 +60,46 @@ jobs:
             event="${BASH_REMATCH[4]}"
             month="${BASH_REMATCH[5]}"
 
-            # Folder validation
+            echo "✔ Filename format OK"
+            echo "➡ serial: $serial, year: $year, count: $count, event: $event, month: $month"
+
+            # Folder → event matching rules
             if [[ "$file" == daily/* && "$event" != "day" ]]; then
-              echo "❌ ERROR: Daily folder accepts only *_day filenames"
+              echo "❌ ERROR: daily folder accepts only *_day files"
               exit 1
             fi
 
             if [[ "$file" == weekly/* && "$event" != "week" ]]; then
-              echo "❌ ERROR: Weekly folder accepts only *_week filenames"
+              echo "❌ ERROR: weekly folder accepts only *_week files"
               exit 1
             fi
 
             if [[ "$file" == monthly/* && "$event" != "month" ]]; then
-              echo "❌ ERROR: Monthly folder accepts only *_month filenames"
+              echo "❌ ERROR: monthly folder accepts only *_month files"
               exit 1
             fi
 
             if [[ "$file" == yearly/* && "$event" != "year" ]]; then
-              echo "❌ ERROR: Yearly folder accepts only *_year filenames"
+              echo "❌ ERROR: yearly folder accepts only *_year files"
               exit 1
             fi
 
-            # Yearly strict rule
-            if [[ "$file" == yearly/* ]]; then
-              if [[ "$count" != "1" ]]; then
-                echo "❌ ERROR: Yearly folder must always have count '1'"
-                exit 1
-              fi
+            # Yearly count rule
+            if [[ "$file" == yearly/* && "$count" != "1" ]]; then
+              echo "❌ ERROR: yearly files must always have count = 1"
+              exit 1
             fi
 
-            echo "✔ FILE IS VALID → $filename"
+            echo "➡ Checking content: must contain at least one comma"
+
+            if ! grep -q "," "$file"; then
+              echo "❌ ERROR: File content is NOT CSV (missing commas)"
+              exit 1
+            fi
+
+            echo "✔ CSV content OK"
+            echo "✔ FILE VALID: $file"
+
           done
 
-          echo "🎉 All files successfully validated!"
+          echo "🎉 ALL FILES VALID"
