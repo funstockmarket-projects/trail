@@ -9,15 +9,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # needed to compare changes
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
-          python-version: '3.x'
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: Get changed files in PR
         id: changed-files
@@ -27,7 +29,11 @@ jobs:
           echo "Changed files:"
           cat changed_files.txt
 
-      - name: Run FUNSTOCKMARKET validator
+      - name: Compile Java Validator
         run: |
-          echo "Running validator only for daily/weekly/monthly/yearly folders..."
-          python .github/scripts/validate_funstocks.py changed_files.txt
+          cd .github/scripts/java-validator/java-validator/src
+          javac Main.java -d ..
+
+      - name: Run Java Validator
+        run: |
+          java -cp .github/scripts/java-validator Main changed_files.txt
