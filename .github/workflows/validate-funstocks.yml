@@ -9,11 +9,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # needed to compare changes with base branch
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -29,11 +28,12 @@ jobs:
           echo "Changed files:"
           cat changed_files.txt
 
-      - name: Compile Java Validator
+      - name: Compile Java validator
         run: |
           cd .github/scripts/java-validator/java-validator/src
           javac Main.java -d ..
 
-      - name: Run Java Validator
+      - name: Run Java validator
         run: |
+          echo "Running FUNSTOCKMARKET Java validator..."
           java -cp .github/scripts/java-validator Main changed_files.txt
