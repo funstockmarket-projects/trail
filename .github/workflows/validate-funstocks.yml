@@ -30,7 +30,7 @@ jobs:
 
       - name: Compile Java validator
         run: |
-          cd .github/scripts/java-validator/src
+          cd .github/scripts/java-validator/java-validator/src
           javac Main.java -d ..
 
       - name: Run Java validator
