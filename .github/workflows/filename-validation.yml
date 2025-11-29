@@ -1,105 +1,228 @@
-name: File Name Validator
+name: File Validator with Email Alerts
 
 on:
   pull_request:
-    paths:
-      - "**"
+    branches:
+      - main
 
 jobs:
-  validate-file-names:
+  validate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Get changed files (WITH SPACES SUPPORT)
-        id: changed
+      - name: Get changed & added files
+        id: changes
         uses: tj-actions/changed-files@v35
         with:
-          separator: "|"
+          files: |
+            daily/**
+            weekly/**
+            monthly/**
+            yearly/**
 
-      - name: Validate file names and CSV content
+      - name: Detect relevant validation files
+        id: detect
         run: |
-          echo "🔍 Validating files..."
+          FILES="${{ steps.changes.outputs.added_files }} ${{ steps.changes.outputs.modified_files }}"
+          
+          TARGET_FILES=""
+          FOUND=false
 
-          IFS="|" read -ra files <<< "${{ steps.changed.outputs.all_changed_files }}"
-
-          echo "Changed files detected:"
-          printf '%s\n' "${files[@]}"
-
-          # Loop through each changed file
-          for file in "${files[@]}"; do
-
-            # Validate only files inside data folders
-            if [[ "$file" != daily/* && "$file" != weekly/* && "$file" != monthly/* && "$file" != yearly/* ]]; then
-              echo "ℹ Skipping non-data file: $file"
-              continue
+          for f in $FILES; do
+            if [[ "$f" == daily/* || "$f" == weekly/* || "$f" == monthly/* || "$f" == yearly/* ]]; then
+              TARGET_FILES="$TARGET_FILES $f"
+              FOUND=true
             fi
-
-            echo "----------------------------------------"
-            echo "Checking file: $file"
-
-            # Extract filename only (with spaces)
-            filename="$(basename "$file")"
-            name_without_ext="${filename%.*}"
-
-            echo "➡ Filename (no extension): $name_without_ext"
-
-            # REGEX: <serial> <year> <count>_<event> <month>
-            regex="^([0-9]+)\s([0-9]{4})\s([0-9]+)_(day|week|month|year)\s([A-Za-z]+)$"
-
-            if [[ ! "$name_without_ext" =~ $regex ]]; then
-              echo "❌ ERROR: Invalid filename format → $filename"
-              exit 1
-            fi
-
-            serial="${BASH_REMATCH[1]}"
-            year="${BASH_REMATCH[2]}"
-            count="${BASH_REMATCH[3]}"
-            event="${BASH_REMATCH[4]}"
-            month="${BASH_REMATCH[5]}"
-
-            echo "✔ Filename format OK"
-            echo "➡ serial: $serial, year: $year, count: $count, event: $event, month: $month"
-
-            # Folder → event matching rules
-            if [[ "$file" == daily/* && "$event" != "day" ]]; then
-              echo "❌ ERROR: daily folder accepts only *_day files"
-              exit 1
-            fi
-
-            if [[ "$file" == weekly/* && "$event" != "week" ]]; then
-              echo "❌ ERROR: weekly folder accepts only *_week files"
-              exit 1
-            fi
-
-            if [[ "$file" == monthly/* && "$event" != "month" ]]; then
-              echo "❌ ERROR: monthly folder accepts only *_month files"
-              exit 1
-            fi
-
-            if [[ "$file" == yearly/* && "$event" != "year" ]]; then
-              echo "❌ ERROR: yearly folder accepts only *_year files"
-              exit 1
-            fi
-
-            # Yearly count rule
-            if [[ "$file" == yearly/* && "$count" != "1" ]]; then
-              echo "❌ ERROR: yearly files must always have count = 1"
-              exit 1
-            fi
-
-            echo "➡ Checking content: must contain at least one comma"
-
-            if ! grep -q "," "$file"; then
-              echo "❌ ERROR: File content is NOT CSV (missing commas)"
-              exit 1
-            fi
-
-            echo "✔ CSV content OK"
-            echo "✔ FILE VALID: $file"
-
           done
 
-          echo "🎉 ALL FILES VALID"
+          echo "FILES_TO_VALIDATE=$TARGET_FILES" >> $GITHUB_ENV
+          echo "SHOULD_VALIDATE=$FOUND" >> $GITHUB_ENV
+
+      - name: Skip validation if no relevant folders touched
+        if: env.SHOULD_VALIDATE == 'false'
+        run: |
+          echo "No relevant files found. Skipping validation."
+          echo "RESULT=success" >> $GITHUB_ENV
+          echo "MESSAGE=No data folder files changed in this PR." >> $GITHUB_ENV
+
+      - name: Perform Validation
+        if: env.SHOULD_VALIDATE == 'true'
+        id: validator
+        run: |
+          TODAY="2025-11-28"
+          ERR=""
+          FILES="$FILES_TO_VALIDATE"
+
+          # Latest serial detection
+          LAST_SERIAL=$(git ls-tree -r main --name-only daily weekly monthly yearly \
+            | sed 's/.*\///' \
+            | grep -E "^[0-9]+" \
+            | cut -d' ' -f1 \
+            | sort -n | tail -1)
+
+          [[ -z "$LAST_SERIAL" ]] && LAST_SERIAL=0
+          EXPECT=$((LAST_SERIAL + 1))
+
+          for file in $FILES; do
+            base=$(basename "$file")
+            name="${base%.csv}"
+
+            if [[ "$base" != *.csv ]]; then
+              ERR="File '$base' must end with .csv"
+              break
+            fi
+
+            if [[ ! "$name" =~ ^([0-9]+)\ ([0-9]{4})\ ([0-9]+)_(day|week|month|year)\ ([A-Za-z]+)$ ]]; then
+              ERR="File '$base' format invalid"
+              break
+            fi
+
+            SERIAL=${BASH_REMATCH[1]}
+            YEAR=${BASH_REMATCH[2]}
+            COUNT=${BASH_REMATCH[3]}
+            EVENT=${BASH_REMATCH[4]}
+            MONTH=${BASH_REMATCH[5]}
+
+            # Serial number continuous
+            if [[ "$SERIAL" -ne "$EXPECT" ]]; then
+              ERR="Invalid serial for '$base'. Expected $EXPECT"
+              break
+            fi
+
+            # YEAR validation (2000 to current)
+            if (( YEAR < 2000 || YEAR > 2025 )); then
+              ERR="Invalid year '$YEAR' in file '$base'"
+              break
+            fi
+
+            # Normalization for month
+            MONTH_LOWER=$(echo "$MONTH" | tr '[:upper:]' '[:lower:]')
+            MONTH_NUM=$(date -d "$MONTH_LOWER 1" +%m 2>/dev/null)
+
+            if [[ -z "$MONTH_NUM" ]]; then
+              ERR="Invalid month name '$MONTH' in file '$base'"
+              break
+            fi
+
+            ### DAILY RULES ###
+            if [[ "$file" == daily/* ]]; then
+              DAY="$COUNT"
+              DATE_STR="$YEAR-$MONTH_NUM-$DAY"
+
+              if ! date -d "$DATE_STR" >/dev/null 2>&1; then
+                ERR="Invalid date in '$base'"
+                break
+              fi
+
+              # Reject future days
+              if [[ "$DATE_STR" > "$TODAY" ]]; then
+                ERR="Future day '$DATE_STR' in '$base' is not allowed"
+                break
+              fi
+
+              # Reject weekends
+              WEEKDAY=$(date -d "$DATE_STR" +%u)
+              if (( WEEKDAY >= 6 )); then
+                ERR="Weekend date '$DATE_STR' in '$base' not allowed"
+                break
+              fi
+            fi
+
+            ### WEEKLY RULES ###
+            if [[ "$file" == weekly/* ]]; then
+              if (( COUNT < 1 || COUNT > 5 )); then
+                ERR="Invalid week number '$COUNT' in '$base'"
+                break
+              fi
+
+              # Check no duplicate week file
+              dupe=$(git ls-tree -r main --name-only weekly \
+                   | grep "${YEAR} ${COUNT}_week" | wc -l)
+
+              if (( dupe >= 1 )); then
+                ERR="Duplicate week file for $YEAR week-$COUNT ('$base')"
+                break
+              fi
+            fi
+
+            ### MONTHLY RULES ###
+            if [[ "$file" == monthly/* ]]; then
+              # COUNT = month number
+              if (( COUNT < 1 || COUNT > 12 )); then
+                ERR="Invalid month number '$COUNT' in '$base'"
+                break
+              fi
+
+              # Reject future month of same year
+              if (( YEAR == 2025 && COUNT > 11 )); then
+                ERR="Future month '$MONTH' in '$base' not allowed"
+                break
+              fi
+
+              # Duplicate monthly file
+              dupe=$(git ls-tree -r main --name-only monthly \
+                   | grep "${YEAR} ${COUNT}_month" | wc -l)
+
+              if (( dupe >= 1 )); then
+                ERR="Duplicate monthly record for $YEAR month-$COUNT ('$base')"
+                break
+              fi
+            fi
+
+            ### YEARLY RULES ###
+            if [[ "$file" == yearly/* ]]; then
+              if (( COUNT != 1 )); then
+                ERR="Yearly count must be 1 ('$base')"
+                break
+              fi
+
+              # Duplicate yearly file
+              dupe=$(git ls-tree -r main --name-only yearly \
+                   | grep "${YEAR} 1_year" | wc -l)
+              if (( dupe >= 1 )); then
+                ERR="Duplicate yearly file for $YEAR ('$base')"
+                break
+              fi
+            fi
+
+            EXPECT=$((EXPECT + 1))
+          done
+
+          if [[ -n "$ERR" ]]; then
+            echo "RESULT=failure" >> $GITHUB_ENV
+            echo "MESSAGE=$ERR" >> $GITHUB_ENV
+            exit 1
+          else
+            echo "RESULT=success" >> $GITHUB_ENV
+            echo "MESSAGE=All files successfully validated." >> $GITHUB_ENV
+          fi
+
+      - name: Send Email Notification
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "File Validation Result: ${{ env.RESULT }}"
+          to: "funstockmarket365@gmail.com"
+          from: "GitHub Validator <${{ secrets.MAIL_USERNAME }}>"
+          secure: true
+          body: |
+            Validation Status: ${{ env.RESULT }}
+
+              Message:
+              ${{ env.MESSAGE }}
+
+              Files checked:
+              ${{ env.FILES_TO_VALIDATE }}
+
+              Repository: ${{ github.repository }}
+              PR: ${{ github.event.pull_request.html_url }}
+
+            Regards,  
+            Fun Market Automation System
