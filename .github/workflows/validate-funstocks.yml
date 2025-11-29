@@ -1,0 +1,33 @@
+name: Validate FUNSTOCKMARKET Files
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate-files:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed to compare changes
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Get changed files in PR
+        id: changed-files
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
+          git diff --name-only origin/${{ github.event.pull_request.base.ref }}...${{ github.sha }} > changed_files.txt
+          echo "Changed files:"
+          cat changed_files.txt
+
+      - name: Run FUNSTOCKMARKET validator
+        run: |
+          echo "Running validator only for daily/weekly/monthly/yearly folders..."
+          python .github/scripts/validate_funstocks.py changed_files.txt
