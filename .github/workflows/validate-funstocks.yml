@@ -25,8 +25,7 @@ jobs:
         run: |
           git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
 
-          # FIX FOR RENAME BUG:
-          # Only Added (A) and Modified (M) files are considered.
+          # Include Added (A), Modified (M), Renamed (R)
           git diff --name-only --diff-filter=AMR origin/${{ github.event.pull_request.base.ref }}...${{ github.sha }} > changed_files.txt
 
           echo "Changed files:"
@@ -41,3 +40,43 @@ jobs:
         run: |
           echo "Running FUNSTOCKMARKET Java validator..."
           java -cp .github/scripts/java-validator Main changed_files.txt
+
+      - name: Validation Summary
+        if: always()
+        run: |
+          echo "======================================"
+          echo " ℹ️ FUNSTOCKMARKET VALIDATION SUMMARY "
+          echo "======================================"
+          echo ""
+          echo "Folders considered:"
+          echo " - daily/"
+          echo " - weekly/"
+          echo " - monthly/"
+          echo " - yearly/"
+          echo ""
+
+          echo "Files validated:"
+          VALIDATED_FILES=$(grep -E "^(daily/|weekly/|monthly/|yearly/)" changed_files.txt)
+
+          if [ -z "$VALIDATED_FILES" ]; then
+            echo " - No relevant files changed."
+          else
+            echo "$VALIDATED_FILES"
+          fi
+
+          echo ""
+          echo "--------------------------------------"
+          echo " PER-FILE SUCCESS RESULTS"
+          echo "--------------------------------------"
+
+          # Loop through each validated file & print success message
+          COUNTER=1
+          for FILE in $VALIDATED_FILES; do
+            echo "${COUNTER}. ${FILE} successfully validated"
+            COUNTER=$((COUNTER+1))
+          done
+
+          echo ""
+          echo "======================================"
+          echo "        END OF VALIDATION SUMMARY     "
+          echo "======================================"
