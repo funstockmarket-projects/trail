@@ -30,10 +30,10 @@ jobs:
 
       - name: Compile Java validator
         run: |
-          cd .github/scripts/java-validator/javaVaidation/src
+          cd .github/scripts/java-validator/src
           javac Main.java -d ..
 
       - name: Run Java validator
         run: |
           echo "Running FUNSTOCKMARKET Java validator..."
-          java -cp .github/scripts/java-validator/javaVaidation/ Main changed_files.txt
+          java -cp .github/scripts/java-validator/Main changed_files.txt
