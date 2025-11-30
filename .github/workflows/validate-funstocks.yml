@@ -12,7 +12,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # needed to compare changes with base branch
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -24,7 +24,11 @@ jobs:
         id: changed-files
         run: |
           git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
-          git diff --name-only origin/${{ github.event.pull_request.base.ref }}...${{ github.sha }} > changed_files.txt
+
+          # FIX FOR RENAME BUG:
+          # Only Added (A) and Modified (M) files are considered.
+          git diff --name-only --diff-filter=AM origin/${{ github.event.pull_request.base.ref }}...${{ github.sha }} > changed_files.txt
+
           echo "Changed files:"
           cat changed_files.txt
 
