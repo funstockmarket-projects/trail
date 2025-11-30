@@ -84,10 +84,10 @@ public class Main {
 
         // 3. Load tracker serials for each folder
         Map<FolderType, Integer> lastSerialMap = new EnumMap<>(FolderType.class);
-        lastSerialMap.put(FolderType.DAILY, readTracker("serial_daily.txt", errors));
-        lastSerialMap.put(FolderType.WEEKLY, readTracker("serial_weekly.txt", errors));
-        lastSerialMap.put(FolderType.MONTHLY, readTracker("serial_monthly.txt", errors));
-        lastSerialMap.put(FolderType.YEARLY, readTracker("serial_yearly.txt", errors));
+        lastSerialMap.put(FolderType.DAILY, readTracker("trackerFiles/serial_daily.txt", errors));
+        lastSerialMap.put(FolderType.WEEKLY, readTracker("trackerFiles/serial_weekly.txt", errors));
+        lastSerialMap.put(FolderType.MONTHLY, readTracker("trackerFiles/serial_monthly.txt", errors));
+        lastSerialMap.put(FolderType.YEARLY, readTracker("trackerFiles/serial_yearly.txt", errors));
 
         // 4. Global rules (year & month name)
         applyGlobalYearAndMonthRules(dailyFiles, weeklyFiles, monthlyFiles, yearlyFiles, today, errors);
