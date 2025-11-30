@@ -27,7 +27,7 @@ jobs:
 
           # FIX FOR RENAME BUG:
           # Only Added (A) and Modified (M) files are considered.
-          git diff --name-only --diff-filter=AM origin/${{ github.event.pull_request.base.ref }}...${{ github.sha }} > changed_files.txt
+          git diff --name-only --diff-filter=AMR origin/${{ github.event.pull_request.base.ref }}...${{ github.sha }} > changed_files.txt
 
           echo "Changed files:"
           cat changed_files.txt
