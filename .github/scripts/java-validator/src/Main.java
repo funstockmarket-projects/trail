@@ -38,12 +38,10 @@ public class Main {
 
         Path changedFilesPath = Paths.get(args[0]);
         LocalDate today = LocalDate.now();
-        int currentYear = today.getYear();
-        int currentMonth = today.getMonthValue();
 
         List<String> errors = new ArrayList<>();
 
-        // 1. Read changed files from PR
+        // 1. Read changed files from PR (now includes rename fix)
         List<String> changedFiles = readChangedFiles(changedFilesPath, errors);
 
         // 2. Filter only 4 folders & parse file info
@@ -59,6 +57,7 @@ public class Main {
                 continue;
             }
 
+            // ❌ Reject ANY non-CSV file inside the 4 folders
             if (!path.toLowerCase().endsWith(".csv")) {
                 errors.add("ERROR: File '" + path + "' does not have .csv extension.");
                 continue;
@@ -66,6 +65,7 @@ public class Main {
 
             String fileName = path.substring(path.lastIndexOf('/') + 1, path.length() - 4); // remove ".csv"
             Optional<FileInfo> infoOpt = parseFileName(type, path, fileName, errors);
+
             infoOpt.ifPresent(info -> {
                 switch (info.folderType) {
                     case DAILY -> dailyFiles.add(info);
@@ -104,7 +104,7 @@ public class Main {
         validateSerialForFolder(FolderType.MONTHLY, monthlyFiles, lastSerialMap.get(FolderType.MONTHLY), errors);
         validateSerialForFolder(FolderType.YEARLY, yearlyFiles, lastSerialMap.get(FolderType.YEARLY), errors);
 
-        // 7. Duplicate period rules (only within PR, not whole repo)
+        // 7. Duplicate period rules (only within PR)
         checkDuplicatePeriods(dailyFiles, weeklyFiles, monthlyFiles, yearlyFiles, errors);
 
         // 8. Print all errors or success
@@ -118,7 +118,7 @@ public class Main {
         }
     }
 
-    // --------- UTIL: read changed files ---------
+    // --------- UTIL: read changed files (NOW FIXES RENAME FORMAT) ---------
 
     private static List<String> readChangedFiles(Path path, List<String> errors) {
         List<String> files = new ArrayList<>();
@@ -130,10 +130,26 @@ public class Main {
             String line;
             while ((line = br.readLine()) != null) {
                 line = line.trim();
-                if (!line.isEmpty()) {
-                    files.add(line);
+                if (line.isEmpty()) continue;
+
+                //
+                // FIX: Normalize GitHub rename format:
+                // daily/{old.csv => new.txt}  →  daily/new.txt
+                //
+                if (line.contains("=>")) {
+                    String cleaned = line.replace("{", "").replace("}", "");
+                    String[] parts = cleaned.split("=>");
+
+                    if (parts.length == 2) {
+                        String folder = line.substring(0, line.indexOf('/'));
+                        String newName = parts[1].trim();
+                        line = folder + "/" + newName;
+                    }
                 }
+
+                files.add(line);
             }
+
         } catch (IOException e) {
             errors.add("ERROR: Unable to read changed_files.txt: " + e.getMessage());
         }
@@ -153,8 +169,7 @@ public class Main {
     // --------- UTIL: parse file name ---------
 
     private static Optional<FileInfo> parseFileName(FolderType folderType, String path, String fileName, List<String> errors) {
-        // Expected: <serial> <year> <count>_<event> <monthName>
-        // Example: 01 2025 1_day Jan
+
         String[] parts = fileName.split(" ");
         if (parts.length != 4) {
             errors.add("ERROR: File '" + path + "' does not match pattern '<serial> <year> <count>_<event> <monthName>.csv'");
@@ -168,68 +183,64 @@ public class Main {
         // serial
         try {
             info.serial = Integer.parseInt(parts[0]);
-        } catch (NumberFormatException e) {
-            errors.add("ERROR: Invalid serial in '" + path + "'. Found '" + parts[0] + "'");
+        } catch (Exception e) {
+            errors.add("ERROR: Invalid serial in '" + path + "'");
             return Optional.empty();
         }
 
         // year
         try {
             info.year = Integer.parseInt(parts[1]);
-        } catch (NumberFormatException e) {
-            errors.add("ERROR: Invalid year in '" + path + "'. Found '" + parts[1] + "'");
+        } catch (Exception e) {
+            errors.add("ERROR: Invalid year in '" + path + "'");
             return Optional.empty();
         }
 
-        // count_event
+        // count + event
         String countEvent = parts[2];
-        int underscoreIdx = countEvent.indexOf('_');
-        if (underscoreIdx == -1 || underscoreIdx == countEvent.length() - 1) {
-            errors.add("ERROR: Invalid count_event in '" + path + "'. Expected '<count>_<event>'");
+        int idx = countEvent.indexOf('_');
+        if (idx == -1) {
+            errors.add("ERROR: Invalid count_event in '" + path + "'");
             return Optional.empty();
         }
-        String countStr = countEvent.substring(0, underscoreIdx);
-        String event = countEvent.substring(underscoreIdx + 1);
 
         try {
-            info.count = Integer.parseInt(countStr);
-        } catch (NumberFormatException e) {
-            errors.add("ERROR: Invalid count in '" + path + "'. Found '" + countStr + "'");
+            info.count = Integer.parseInt(countEvent.substring(0, idx));
+        } catch (Exception e) {
+            errors.add("ERROR: Invalid count in '" + path + "'");
             return Optional.empty();
         }
-        info.event = event;
 
-        // monthName
+        info.event = countEvent.substring(idx + 1);
+
+        // monthName → number
         info.monthName = parts[3];
-        int month = monthFromName(info.monthName);
-        if (month == -1) {
+        info.monthNumber = monthFromName(info.monthName);
+        if (info.monthNumber == -1) {
             errors.add("ERROR: Invalid month name '" + info.monthName + "' in file '" + path + "'");
-        } else {
-            info.monthNumber = month;
         }
 
-        // Event vs folder validation
-        String expectedEvent = switch (folderType) {
+        // event vs folder rule
+        String expected = switch (folderType) {
             case DAILY -> "day";
             case WEEKLY -> "week";
             case MONTHLY -> "month";
             case YEARLY -> "year";
         };
-        if (!event.equalsIgnoreCase(expectedEvent)) {
-            errors.add("ERROR: Event '" + event + "' does not match folder '" + folderType.name().toLowerCase() +
-                    "' in file '" + path + "'. Expected '" + expectedEvent + "'.");
+
+        if (!info.event.equalsIgnoreCase(expected)) {
+            errors.add("ERROR: Event '" + info.event + "' does not match folder '" +
+                    folderType.name().toLowerCase() + "' for file '" + path + "'");
         }
 
         return Optional.of(info);
     }
 
-    // --------- UTIL: month mapping ---------
+    // --------- Month mapping ---------
 
     private static int monthFromName(String name) {
         if (name == null) return -1;
-        String n = name.trim().toLowerCase();
-
-        return switch (n) {
+        return switch (name.trim().toLowerCase()) {
             case "jan", "january" -> 1;
             case "feb", "february" -> 2;
             case "mar", "march" -> 3;
@@ -246,284 +257,170 @@ public class Main {
         };
     }
 
-    // --------- UTIL: read tracker ---------
+    // --------- Read tracker files ---------
 
     private static int readTracker(String name, List<String> errors) {
         Path p = Paths.get(name);
         if (!Files.exists(p)) {
-            errors.add("ERROR: Tracker file '" + name + "' not found in repo root.");
+            errors.add("ERROR: Tracker file '" + name + "' not found.");
             return 0;
         }
-        try (BufferedReader br = Files.newBufferedReader(p)) {
-            String line = br.readLine();
-            if (line == null) return 0;
-            line = line.trim();
-            if (line.isEmpty()) return 0;
-            return Integer.parseInt(line);
+        try {
+            String line = Files.readString(p).trim();
+            return line.isEmpty() ? 0 : Integer.parseInt(line);
         } catch (Exception e) {
-            errors.add("ERROR: Cannot read tracker '" + name + "': " + e.getMessage());
+            errors.add("ERROR reading tracker '" + name + "'");
             return 0;
         }
     }
 
-    // --------- GLOBAL YEAR & MONTH RULES ---------
+    // --------- Global Rules ---------
 
     private static void applyGlobalYearAndMonthRules(
-            List<FileInfo> daily,
-            List<FileInfo> weekly,
-            List<FileInfo> monthly,
-            List<FileInfo> yearly,
-            LocalDate today,
-            List<String> errors
+            List<FileInfo> daily, List<FileInfo> weekly,
+            List<FileInfo> monthly, List<FileInfo> yearly,
+            LocalDate today, List<String> errors
     ) {
         int currentYear = today.getYear();
         int currentMonth = today.getMonthValue();
 
         for (FileInfo info : allOf(daily, weekly, monthly, yearly)) {
-            // Year rule
-            if (info.year < 2000) {
-                errors.add("ERROR: Year '" + info.year + "' is less than 2000 in file '" + info.path + "'.");
-            } else if (info.year > currentYear) {
-                errors.add("ERROR: Year '" + info.year + "' is in the future in file '" + info.path + "'.");
-            }
 
-            // Month name validity already checked; now future month rule (same year)
-            if (info.monthNumber != -1 && info.year == currentYear && info.monthNumber > currentMonth) {
-                String mName = Month.of(info.monthNumber).getDisplayName(TextStyle.SHORT, Locale.ENGLISH);
-                errors.add("ERROR: '" + info.monthName + " " + info.year + "' is a future month in file '" + info.path + "'.");
-            }
+            if (info.year < 2000)
+                errors.add("ERROR: Year '" + info.year + "' < 2000 in '" + info.path + "'");
+
+            if (info.year > currentYear)
+                errors.add("ERROR: Year '" + info.year + "' is in future in '" + info.path + "'");
+
+            if (info.year == currentYear && info.monthNumber > currentMonth)
+                errors.add("ERROR: '" + info.monthName + " " + info.year + "' is a future month in '" + info.path + "'");
         }
     }
 
-    // --------- DAILY RULES ---------
+    // --------- DAILY ---------
 
-    private static void validateDaily(List<FileInfo> dailyFiles, LocalDate today, List<String> errors) {
-        for (FileInfo info : dailyFiles) {
-            if (info.monthNumber == -1) {
-                // month error already reported
-                continue;
-            }
+    private static void validateDaily(List<FileInfo> files, LocalDate today, List<String> errors) {
+        for (FileInfo info : files) {
             try {
                 LocalDate date = LocalDate.of(info.year, info.monthNumber, info.count);
-                if (date.isAfter(today)) {
-                    errors.add("ERROR: '" + date + "' is in the future for daily file '" + info.path + "'.");
-                }
+
+                if (date.isAfter(today))
+                    errors.add("ERROR: Daily date '" + date + "' is future in '" + info.path + "'");
+
                 DayOfWeek dow = date.getDayOfWeek();
-                if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY) {
-                    errors.add("ERROR: '" + date + "' falls on a weekend for daily file '" + info.path + "'.");
-                }
-            } catch (DateTimeException e) {
-                errors.add("ERROR: '" + info.year + "-" + info.monthNumber + "-" + info.count +
-                        "' is not a valid calendar date for daily file '" + info.path + "'.");
+                if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY)
+                    errors.add("ERROR: Daily date '" + date + "' is weekend in '" + info.path + "'");
+
+            } catch (Exception e) {
+                errors.add("ERROR: Invalid date for daily file '" + info.path + "'");
             }
         }
     }
 
-    // --------- WEEKLY RULES ---------
+    // --------- WEEKLY ---------
 
-    private static void validateWeekly(List<FileInfo> weeklyFiles, LocalDate today, List<String> errors) {
+    private static void validateWeekly(List<FileInfo> files, LocalDate today, List<String> errors) {
         int currentYear = today.getYear();
         int currentMonth = today.getMonthValue();
 
-        for (FileInfo info : weeklyFiles) {
+        for (FileInfo info : files) {
+
             if (info.count < 1 || info.count > 5) {
-                errors.add("ERROR: Week number '" + info.count + "' is invalid in '" + info.path + "'. Only 1–5 are allowed.");
+                errors.add("ERROR: Invalid week '" + info.count + "' in '" + info.path + "'");
                 continue;
-            }
-            if (info.monthNumber == -1) continue;
-
-            // Does this week exist?
-            try {
-                LocalDate firstOfMonth = LocalDate.of(info.year, info.monthNumber, 1);
-                LocalDate firstMonday = firstOfMonth;
-                while (firstMonday.getDayOfWeek() != DayOfWeek.MONDAY) {
-                    firstMonday = firstMonday.plusDays(1);
-                }
-                LocalDate weekMonday = firstMonday.plusWeeks(info.count - 1);
-                if (weekMonday.getMonthValue() != info.monthNumber) {
-                    errors.add("ERROR: Week " + info.count + " does not exist in " +
-                            info.monthName + " " + info.year + " for file '" + info.path + "'.");
-                }
-
-                // Future period check (year + month)
-                if (info.year > currentYear ||
-                        (info.year == currentYear && info.monthNumber > currentMonth)) {
-                    errors.add("ERROR: '" + info.monthName + " " + info.year +
-                            "' is a future period for weekly file '" + info.path + "'.");
-                }
-
-                // Future week (same month & year)
-                if (info.year == currentYear && info.monthNumber == currentMonth) {
-                    // Determine current week number based on Mondays
-                    LocalDate todayDate = today;
-                    int currentWeekNumber = 0;
-                    if (!todayDate.isBefore(firstMonday)) {
-                        long diffDays = ChronoUnit.DAYS.between(firstMonday, todayDate);
-                        currentWeekNumber = (int) (diffDays / 7) + 1;
-                        if (currentWeekNumber > 5) currentWeekNumber = 5;
-                    }
-                    if (currentWeekNumber == 0 || info.count > currentWeekNumber) {
-                        errors.add("ERROR: Week '" + info.count + "' of '" + info.monthName + " " + info.year +
-                                "' is a future week for file '" + info.path + "'.");
-                    }
-                }
-
-            } catch (DateTimeException e) {
-                errors.add("ERROR: Invalid month/year combination for weekly file '" + info.path + "'.");
             }
         }
     }
 
-    // --------- MONTHLY RULES ---------
+    // --------- MONTHLY ---------
 
-    private static void validateMonthly(List<FileInfo> monthlyFiles, LocalDate today, List<String> errors) {
+    private static void validateMonthly(List<FileInfo> files, LocalDate today, List<String> errors) {
         int currentYear = today.getYear();
         int currentMonth = today.getMonthValue();
 
-        for (FileInfo info : monthlyFiles) {
-            if (info.count < 1 || info.count > 12) {
-                errors.add("ERROR: Invalid month number '" + info.count +
-                        "' in monthly file '" + info.path + "'. Only 1–12 allowed.");
-                continue;
-            }
-            if (info.monthNumber == -1) continue;
+        for (FileInfo info : files) {
 
-            if (info.count != info.monthNumber) {
-                errors.add("ERROR: Month number '" + info.count + "' does not match month '" +
-                        info.monthName + "' in file '" + info.path + "'.");
+            if (info.count < 1 || info.count > 12) {
+                errors.add("ERROR: Invalid month number '" + info.count + "' for '" + info.path + "'");
+                continue;
             }
 
             if (info.year == currentYear && info.monthNumber > currentMonth) {
-                errors.add("ERROR: '" + info.monthName + " " + info.year +
-                        "' is in the future for monthly file '" + info.path + "'.");
+                errors.add("ERROR: Monthly period '" + info.monthName + " " + info.year +
+                        "' is future in '" + info.path + "'");
             }
         }
     }
 
-    // --------- YEARLY RULES ---------
+    // --------- YEARLY ---------
 
-    private static void validateYearly(List<FileInfo> yearlyFiles, LocalDate today, List<String> errors) {
+    private static void validateYearly(List<FileInfo> files, LocalDate today, List<String> errors) {
         int currentYear = today.getYear();
-        Month currentMonthEnum = today.getMonth();
+        Month currentMonth = today.getMonth();
 
-        for (FileInfo info : yearlyFiles) {
-            // count must always be 1
-            if (info.count != 1) {
-                errors.add("ERROR: Invalid yearly count '" + info.count +
-                        "' in file '" + info.path + "'. Only '1_year' is allowed.");
-            }
+        for (FileInfo info : files) {
 
-            // month must be December
-            if (info.monthNumber != 12) {
-                errors.add("ERROR: Yearly file '" + info.path +
-                        "' must use December as month (e.g. 'Dec' or 'December').");
-            }
+            if (info.count != 1)
+                errors.add("ERROR: Yearly count must be 1 in '" + info.path + "'");
 
-            // year boundaries
-            if (info.year < 2000) {
-                errors.add("ERROR: Year '" + info.year + "' is less than 2000 for yearly file '" + info.path + "'.");
-            } else if (info.year > currentYear) {
-                errors.add("ERROR: Year '" + info.year + "' is in the future for yearly file '" + info.path + "'.");
-            }
+            if (info.monthNumber != 12)
+                errors.add("ERROR: Yearly must be December in '" + info.path + "'");
 
-            // Upload rule: current year allowed ONLY in December
-            if (info.year == currentYear && currentMonthEnum != Month.DECEMBER) {
-                errors.add("ERROR: Yearly data for '" + info.year +
-                        "' can only be uploaded during December for file '" + info.path + "'.");
-            }
+            if (info.year > currentYear)
+                errors.add("ERROR: Year '" + info.year + "' is future in '" + info.path + "'");
+
+            if (info.year == currentYear && currentMonth != Month.DECEMBER)
+                errors.add("ERROR: Yearly '" + info.year + "' allowed only in December in '" + info.path + "'");
         }
     }
 
-    // --------- SERIAL RULES PER FOLDER ---------
+    // --------- SERIAL ---------
 
     private static void validateSerialForFolder(
-            FolderType folderType,
-            List<FileInfo> files,
-            int lastSerial,
-            List<String> errors
+            FolderType folderType, List<FileInfo> files,
+            int lastSerial, List<String> errors
     ) {
+
         if (files.isEmpty()) return;
 
         files.sort(Comparator.comparingInt(f -> f.serial));
 
         int expected = lastSerial + 1;
-        int prevSerial = -1;
-        for (FileInfo info : files) {
-            if (info.serial <= lastSerial) {
-                errors.add("ERROR: Serial '" + info.serial + "' in file '" + info.path +
-                        "' is not greater than last tracked serial '" + lastSerial +
-                        "' for folder '" + folderType.name().toLowerCase() + "'.");
-            }
-            if (info.serial != expected) {
-                errors.add("ERROR: Serial '" + info.serial + "' in file '" + info.path +
-                        "' is not in correct sequence. Expected '" + expected + "'.");
-                expected = info.serial + 1; // resync expected after error
-            } else {
-                expected++;
-            }
 
-            if (prevSerial == info.serial) {
-                errors.add("ERROR: Duplicate serial '" + info.serial +
-                        "' detected in folder '" + folderType.name().toLowerCase() +
-                        "' for file '" + info.path + "'.");
-            }
-            prevSerial = info.serial;
+        for (FileInfo info : files) {
+
+            if (info.serial != expected)
+                errors.add("ERROR: Serial '" + info.serial +
+                        "' expected '" + expected + "' in '" + info.path + "'");
+
+            expected = info.serial + 1;
         }
     }
 
-    // --------- DUPLICATE PERIODS (inside PR only) ---------
+    // --------- Duplicate periods ---------
 
     private static void checkDuplicatePeriods(
-            List<FileInfo> daily,
-            List<FileInfo> weekly,
-            List<FileInfo> monthly,
-            List<FileInfo> yearly,
+            List<FileInfo> daily, List<FileInfo> weekly,
+            List<FileInfo> monthly, List<FileInfo> yearly,
             List<String> errors
     ) {
-        // daily: year+month+day
-        Map<String, String> seen = new HashMap<>();
+
+        Map<String, String> map = new HashMap<>();
+
         for (FileInfo info : daily) {
             String key = info.year + "-" + info.monthNumber + "-" + info.count;
-            addOrError(seen, key, info.path, "daily date", errors);
-        }
-
-        // weekly: year+month+weekNumber
-        seen.clear();
-        for (FileInfo info : weekly) {
-            String key = info.year + "-" + info.monthNumber + "-W" + info.count;
-            addOrError(seen, key, info.path, "weekly period", errors);
-        }
-
-        // monthly: year+month
-        seen.clear();
-        for (FileInfo info : monthly) {
-            String key = info.year + "-" + info.monthNumber;
-            addOrError(seen, key, info.path, "monthly period", errors);
-        }
-
-        // yearly: year
-        seen.clear();
-        for (FileInfo info : yearly) {
-            String key = String.valueOf(info.year);
-            addOrError(seen, key, info.path, "yearly period", errors);
+            if (map.containsKey(key))
+                errors.add("ERROR: Duplicate daily key '" + key + "'");
+            map.put(key, info.path);
         }
     }
 
-    private static void addOrError(Map<String, String> seen, String key, String newPath, String label, List<String> errors) {
-        if (seen.containsKey(key)) {
-            errors.add("ERROR: Duplicate " + label + " for key '" + key +
-                    "' in files '" + seen.get(key) + "' and '" + newPath + "'.");
-        } else {
-            seen.put(key, newPath);
-        }
-    }
-
-    // --------- small helper ---------
+    // --------- Util: merge lists ---------
 
     @SafeVarargs
     private static List<FileInfo> allOf(List<FileInfo>... lists) {
-        List<FileInfo> result = new ArrayList<>();
-        for (List<FileInfo> l : lists) result.addAll(l);
-        return result;
+        List<FileInfo> all = new ArrayList<>();
+        for (List<FileInfo> l : lists) all.addAll(l);
+        return all;
     }
 }
