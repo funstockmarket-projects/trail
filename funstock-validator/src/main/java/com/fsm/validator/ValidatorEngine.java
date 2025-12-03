@@ -8,14 +8,13 @@ import models.ValidationResult;
 public class ValidatorEngine {
 
     private final FileParser parser = new FileParser();
-    // private final TimePeriodChecker timeChecker = new TimePeriodChecker();
     private final MissingFileProcessor missingProcessor = new MissingFileProcessor();
     private final HoldingsProcessor holdingsProcessor = new HoldingsProcessor();
     private final GitHubService git = new GitHubService();
 
     public void run() {
 
-        // folders to validate
+        // ⭐ FIXED: use lowercase folder names → matches your real folder structure
         List<String> folders = Arrays.asList("Daily", "Weekly", "Monthly", "Yearly");
 
         for (String folder : folders) {
@@ -41,26 +40,27 @@ public class ValidatorEngine {
 
         // PR Check
         if (git.prExists(folder))
-            return ValidationResult.fail("PR exists for the folder" + folder);
+            return ValidationResult.fail("PR exists for folder: " + folder);
 
-        // Parse
+        // Parse each file
         for (String file : rawFiles) {
             FileInfo info = parser.parse(file, folder);
-
             if (info == null)
                 return ValidationResult.fail("Invalid file format: " + file);
 
-            // existing file in main branch → ignore
+            // files already in MAIN branch → skip (valid file, no processing needed)
             if (git.existsInMain(info, mainBranchFiles))
                 continue;
 
+            // holdings rule: only 1 per folder
             if (info.isHoldings()) {
                 if (holdings != null)
-                    return ValidationResult.fail("Multiple holdings.csv in " + folder);
+                    return ValidationResult.fail("Multiple holdings.csv found in folder: " + folder);
                 holdings = info;
                 continue;
             }
 
+            // missing → no serial number
             if (info.isMissing())
                 missingFiles.add(info);
             else
@@ -69,15 +69,16 @@ public class ValidatorEngine {
 
         // weekend rule
         if (holdings != null && Utils.isWeekend())
-            return ValidationResult.fail("Weekend file upload in The: " + folder);
+            return ValidationResult.fail("Weekend holdings upload detected in folder: " + folder);
 
-        // process missing first
-        ValidationResult missingRes = missingProcessor.processMissing(missingFiles, branchFiles, mainBranchFiles);
-
+        // process missing files first
+        ValidationResult missingRes = missingProcessor.processMissing(
+                missingFiles, branchFiles, mainBranchFiles
+        );
         if (!missingRes.isValid())
             return missingRes;
 
-        // process holdings next
+        // then process holdings
         if (holdings != null) {
             ValidationResult holdRes = holdingsProcessor.processHoldings(
                     holdings, missingFiles, branchFiles, mainBranchFiles
@@ -85,14 +86,14 @@ public class ValidatorEngine {
             if (!holdRes.isValid())
                 return holdRes;
         }
-        // APPLY RENAME (missing files + holdings)
-        for (FileInfo f : missingFiles) {
-            FileRenamer.rename(f);
-        }
 
-        if (holdings != null) {
+        // ⭐ Apply Rename AFTER all validations pass
+        for (FileInfo f : missingFiles)
+            FileRenamer.rename(f);
+
+        if (holdings != null)
             FileRenamer.rename(holdings);
-        }        
+
         return ValidationResult.pass();
     }
 }
