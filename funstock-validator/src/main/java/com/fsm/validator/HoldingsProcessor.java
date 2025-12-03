@@ -44,7 +44,7 @@ public class HoldingsProcessor {
         // Check duplicate time period BEFORE assigning final name
         String key = time.key(f);
         if (time.exists(key, all)) {
-            return ValidationResult.fail("Duplicate time period (holdings)");
+            return ValidationResult.fail("Duplicate time period (holdings)"+key+" "+all.get(0));
         }
 
         // Assign serial number
