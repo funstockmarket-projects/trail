@@ -1,0 +1,24 @@
+name: Validate Files
+
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+
+      - name: Build
+        run: mvn -q -DskipTests package
+
+      - name: Run Validator
+        run: java -cp target/funstock-validator-1.0-SNAPSHOT.jar com.fsm.validator.Main
