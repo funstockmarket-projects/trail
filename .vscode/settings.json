@@ -1,0 +1,6 @@
+{
+    "java.project.sourcePaths": [
+        ".github/scripts/java-validator/src",
+        "funstock-validator/src/main/java/com/fsm/validator"
+    ]
+}
